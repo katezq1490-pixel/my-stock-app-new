@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StockPulse AI - 独立版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- 引入 Babel 用于解析 JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        .animate-fade-in-up { animation: fadeInUp 0.5s ease-out; }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* 简单的 Markdown 样式 */
+        .prose h1 { font-size: 1.5rem; font-weight: 700; color: white; margin-top: 1.5rem; margin-bottom: 1rem; }
+        .prose h2 { font-size: 1.25rem; font-weight: 700; color: white; margin-top: 1.5rem; margin-bottom: 0.75rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; }
+        .prose h3 { font-size: 1.125rem; font-weight: 600; color: #34d399; margin-top: 1.25rem; margin-bottom: 0.5rem; }
+        .prose p { margin-bottom: 0.75rem; line-height: 1.6; color: #cbd5e1; }
+        .prose strong { color: #e2e8f0; font-weight: 600; }
+        .prose ul { list-style-type: disc; padding-left: 1.5rem; margin-bottom: 1rem; color: #cbd5e1; }
+        .prose li { margin-bottom: 0.25rem; }
+    </style>
+
+    <!-- 关键修复：添加 process polyfill，防止 SDK 报错 -->
+    <script>
+        window.process = { env: { NODE_ENV: 'production' } };
+    </script>
+
+    <!-- 定义 Import Map -->
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "@google/genai": "https://esm.sh/@google/genai"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- 主程序逻辑 -->
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { GoogleGenAI } from '@google/genai';
+
+        // --- API Key 管理组件 ---
+        const ApiKeyModal = ({ onSave }) => {
+            const [key, setKey] = useState('');
+            
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (key.trim().length > 10) {
+                    onSave(key.trim());
+                } else {
+                    alert("请输入有效的 API Key");
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+                    <div className="bg-slate-800 border border-slate-700 rounded-2xl p-8 max-w-md w-full shadow-2xl">
+                        <h2 className="text-2xl font-bold text-white mb-4">配置 Gemini API</h2>
+                        <p className="text-slate-400 mb-6 text-sm">
+                            这是一个静态网页应用，您的 API Key 仅保存在您本地浏览器的缓存中，不会发送给任何服务器。
+                        </p>
+                        <form onSubmit={handleSubmit}>
+                            <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">API Key</label>
+                            <input 
+                                type="password" 
+                                value={key}
+                                onChange={(e) => setKey(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-emerald-500 outline-none mb-6"
+                                placeholder="粘贴您的 Key..."
+                            />
+                            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition-colors">
+                                确认并保存
+                            </button>
+                            <div className="mt-4 text-center">
+                                <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-xs text-emerald-400 hover:underline">
+                                    没有 Key? 去 Google AI Studio 获取
+                                </a>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- 核心组件 ---
+
+        const Header = ({ onResetKey }) => (
+            <header className="w-full py-6 border-b border-slate-800 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
+                <div className="max-w-5xl mx-auto px-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-cyan-600 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-white">
+                                <path fillRule="evenodd" d="M2.25 13.5a8.25 8.25 0 018.25-8.25.75.75 0 01.75.75v6.75H18a.75.75 0 01.75.75 8.25 8.25 0 01-16.5 0zm1.5 1.5a6.75 6.75 0 006.75 6.75v-6.75H3.75z" clipRule="evenodd" />
+                                <path d="M13.5 1.515a.75.75 0 011.277 0c2.862 5.142 1.507 11.861-3.277 15.41v-4.06l4.27-3.202a.75.75 0 00-1.2-1.6l-3.07 2.303V1.515z" />
+                            </svg>
+                        </div>
+                        <div>
+                            <h1 className="text-2xl font-bold text-white tracking-tight">StockPulse AI</h1>
+                            <p className="text-xs text-slate-400 font-medium uppercase tracking-wider">独立版 · 双击即用</p>
+                        </div>
+                    </div>
+                    <button onClick={onResetKey} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">
+                        重置 Key
+                    </button>
+                </div>
+            </header>
+        );
+
+        const StockInput = ({ onAddStock, disabled }) => {
+            const [inputValue, setInputValue] = useState('');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (inputValue.trim()) {
+                    const rawSymbols = inputValue.split(/[,，\s]+/);
+                    const validSymbols = rawSymbols.map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
+                    if (validSymbols.length > 0) {
+                        onAddStock(validSymbols);
+                        setInputValue('');
+                    }
+                }
+            };
+
+            return (
+                <form onSubmit={handleSubmit} className="relative w-full max-w-md">
+                    <div className="relative">
+                        <input
+                            type="text"
+                            value={inputValue}
+                            onChange={(e) => setInputValue(e.target.value)}
+                            placeholder="输入代码 (如: AAPL, 茅台, 腾讯)"
+                            disabled={disabled}
+                            className="w-full pl-12 pr-4 py-4 bg-slate-800/50 border border-slate-700 rounded-2xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all shadow-inner"
+                        />
+                        <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                            </svg>
+                        </div>
+                        <button
+                            type="submit"
+                            disabled={!inputValue.trim() || disabled}
+                            className="absolute right-2 top-2 bottom-2 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-xl font-medium text-sm transition-colors shadow-lg shadow-emerald-900/20"
+                        >
+                            添加
+                        </button>
+                    </div>
+                </form>
+            );
+        };
+
+        const AnalysisView = ({ result }) => {
+            // 简单的 markdown 渲染，直接使用 innerHTML 配合预处理比较危险，这里用简易的替换逻辑
+            // 为简化代码，我们假设 result.markdown 格式良好，使用 CSS 处理样式
+            
+            // 处理换行和基本格式
+            const renderContent = () => {
+                // 将 Markdown 转换为简单的 HTML 结构 (仅用于演示，生产环境建议用 marked 等库)
+                // 这里为了单文件简洁性，我们简单处理标题和列表
+                let html = result.markdown
+                    .replace(/### (.*)/g, '<h3>$1</h3>')
+                    .replace(/## (.*)/g, '<h2>$1</h2>')
+                    .replace(/# (.*)/g, '<h1>$1</h1>')
+                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/- (.*)/g, '<ul><li>$1</li></ul>')
+                    .replace(/\n/g, '<br />');
+                
+                // 修复连续的 ul (简单的正则替换很难完美，但对展示足够)
+                html = html.replace(/<\/ul><br \/><ul>/g, ''); 
+                
+                return { __html: html };
+            };
+
+            return (
+                <div className="animate-fade-in-up">
+                    <div className="bg-slate-800/40 border border-slate-700 rounded-3xl p-6 md:p-8 backdrop-blur-sm shadow-xl mb-8">
+                        <div className="prose prose-invert max-w-none" dangerouslySetInnerHTML={renderContent()} />
+                    </div>
+
+                    {result.sources && result.sources.length > 0 && (
+                        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                            <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                                来源与讨论
+                            </h3>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                                {result.sources.map((source, idx) => (
+                                    <a key={idx} href={source.uri} target="_blank" rel="noopener noreferrer" className="group block p-3 rounded-xl bg-slate-800 hover:bg-slate-700 transition-all border border-slate-700 hover:border-emerald-500/30">
+                                        <div className="overflow-hidden">
+                                            <p className="text-sm text-slate-200 font-medium truncate group-hover:text-emerald-400 transition-colors">{source.title}</p>
+                                            <p className="text-xs text-slate-500 truncate mt-0.5">{new URL(source.uri).hostname}</p>
+                                        </div>
+                                    </a>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // --- App 主程序 ---
+
+        const App = () => {
+            const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
+            const [stocks, setStocks] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [result, setResult] = useState(null);
+            const [error, setError] = useState(null);
+
+            // 加载保存的股票
+            useEffect(() => {
+                const saved = localStorage.getItem('stockpulse_watchlist');
+                if (saved) setStocks(JSON.parse(saved));
+            }, []);
+
+            // 保存股票
+            useEffect(() => {
+                localStorage.setItem('stockpulse_watchlist', JSON.stringify(stocks));
+            }, [stocks]);
+
+            const handleSaveKey = (key) => {
+                localStorage.setItem('gemini_api_key', key);
+                setApiKey(key);
+            };
+
+            const handleResetKey = () => {
+                localStorage.removeItem('gemini_api_key');
+                setApiKey('');
+            };
+
+            const addStocks = (symbols) => {
+                const newStocks = [...stocks];
+                const existing = new Set(stocks.map(s => s.symbol));
+                symbols.forEach(sym => {
+                    if (!existing.has(sym)) {
+                        newStocks.push({ id: Date.now() + Math.random(), symbol: sym });
+                    }
+                });
+                setStocks(newStocks);
+            };
+
+            const removeStock = (id) => {
+                setStocks(stocks.filter(s => s.id !== id));
+            };
+
+            const runAnalysis = async () => {
+                if (!apiKey) return;
+                setLoading(true);
+                setError(null);
+                setResult(null);
+
+                try {
+                    const ai = new GoogleGenAI({ apiKey: apiKey });
+                    const stockList = stocks.map(s => s.symbol).join(", ");
+                    
+                    const prompt = `
+                        我需要以下公司的情报：${stockList}。
+                        请利用 Google 搜索，针对**美股**参考 WSJ, Seeking Alpha, Reddit；针对**中国股票**参考雪球、股吧、财新。
+                        
+                        请生成一份中文报告，包含：
+                        1. 📰 **关键动态** (News)
+                        2. 🗣️ **社区辣评** (挖掘散户和KOL的真实观点，包含看多/看空逻辑和槽点)
+                        3. 🚦 **情绪总结**
+                        
+                        请使用 Markdown 格式，二级标题分隔股票。
+                    `;
+
+                    const response = await ai.models.generateContent({
+                        model: "gemini-2.5-flash",
+                        contents: prompt,
+                        config: { tools: [{ googleSearch: {} }] },
+                    });
+
+                    const text = response.text || "无内容生成";
+                    const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+                    const sources = chunks
+                        .filter(c => c.web)
+                        .map(c => ({ uri: c.web.uri, title: c.web.title }))
+                        .filter((v, i, a) => a.findIndex(t => (t.uri === v.uri)) === i);
+
+                    setResult({ markdown: text, sources });
+
+                } catch (err) {
+                    console.error(err);
+                    setError("分析失败：请检查 API Key 是否正确，或网络是否通畅。");
+                    if (err.message.includes("401") || err.message.includes("API key")) {
+                        handleResetKey();
+                        alert("API Key 无效，请重新输入。");
+                    }
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            if (!apiKey) return <ApiKeyModal onSave={handleSaveKey} />;
+
+            return (
+                <div className="min-h-screen pb-12">
+                    <Header onResetKey={handleResetKey} />
+                    
+                    <main className="max-w-5xl mx-auto px-4 py-12">
+                        <div className="flex flex-col items-center text-center mb-10 space-y-6">
+                            <p className="text-slate-400 text-base max-w-2xl">
+                                您的私人投资助理 · 自动聚合全球媒体与社区情报
+                            </p>
+                            
+                            <StockInput onAddStock={addStocks} disabled={loading} />
+
+                            <div className="flex flex-wrap justify-center gap-2 w-full max-w-3xl">
+                                {stocks.map(stock => (
+                                    <div key={stock.id} className="flex items-center gap-2 pl-3 pr-2 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-emerald-300 text-sm">
+                                        <span>{stock.symbol}</span>
+                                        <button onClick={() => removeStock(stock.id)} disabled={loading} className="text-slate-500 hover:text-red-400">✕</button>
+                                    </div>
+                                ))}
+                                {stocks.length === 0 && <span className="text-slate-600 italic text-sm py-2">添加股票以开始...</span>}
+                            </div>
+
+                            {stocks.length > 0 && (
+                                <button 
+                                    onClick={runAnalysis} 
+                                    disabled={loading}
+                                    className={`px-10 py-3 rounded-xl font-bold text-white shadow-xl transition-all ${loading ? 'bg-slate-700 cursor-wait' : 'bg-emerald-600 hover:bg-emerald-500 hover:scale-105'}`}
+                                >
+                                    {loading ? 'AI 正在思考中...' : '开始搜集情报'}
+                                </button>
+                            )}
+                        </div>
+
+                        <div className="w-full h-px bg-slate-800/50 my-8"></div>
+
+                        {error && (
+                            <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-6 text-center text-red-300 mb-8">
+                                {error}
+                            </div>
+                        )}
+
+                        {result && <AnalysisView result={result} />}
+                    </main>
+                    
+                    <footer className="text-center text-slate-600 text-xs pb-8">
+                        <p>© StockPulse AI (Standalone v1.2 Fixed)</p>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
